@@ -33,6 +33,11 @@
 #define GLCD_ALIGN_CENTER 1
 #define GLCD_ALIGN_RIGHT  2
 
+// Custom glyphs stored at codes >= 0x80 in font2.cpp (Home/Car/Sun icons)
+#define LCD_ICON_HOME 0x80
+#define LCD_ICON_CAR  0x81
+#define LCD_ICON_SUN  0x82
+
 extern void GLCDHelp(void);
 extern void GLCD(void);
 extern void GLCDMenu(unsigned char Buttons);

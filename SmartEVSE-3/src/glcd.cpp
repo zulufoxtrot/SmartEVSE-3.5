@@ -78,8 +78,8 @@ uint8_t LCDpos = 0;
 bool LCDToggle = false;                                                         // Toggle display between two values
 unsigned char LCDText = 0;                                                      // Cycle through text messages
 unsigned int GLCDx, GLCDy;
-uint8_t GLCDbuf[512];                                                           // GLCD buffer (half of the display)
-uint8_t GLCDbuf2[1024];                                                         // Buffer that mirrors the complete LCD.    
+uint8_t GLCDbuf[1024];                                                          // GLCD working buffer (full 8 rows)
+uint8_t GLCDbuf2[1024];                                                         // Buffer that mirrors the complete LCD.
 tm DelayedStartTimeTM;
 time_t DelayedStartTime_Old;
 uint8_t MenuItems[MENU_EXIT];
@@ -93,6 +93,11 @@ extern String APpassword;
 unsigned char activeRow;
 extern Switch_Phase_t Switching_Phases_C2;
 extern uint8_t RCMTestCounter;
+extern int16_t homeBatteryCurrent;
+extern time_t homeBatteryLastUpdate;
+extern int8_t homeBatterySoc;                                                 // Home battery SoC (0-100%, -1 = unavailable)
+extern int8_t evSoc;                                                          // EV/car battery SoC (0-100%, -1 = unavailable)
+extern int solarPowerW;                                                       // Solar power in Watts (set via MQTT or calculated)
 
 #if SMARTEVSE_VERSION >=30 && SMARTEVSE_VERSION < 40
 
@@ -193,10 +198,7 @@ void glcd_clear(void) {
 }
 
 void GLCD_buffer_clr(void) {
-    unsigned char x = 0;
-    do {
-        GLCDbuf[x++] = 0;                                                       // clear first 256 bytes of GLCD buffer
-    } while (x != 0);
+    memset(GLCDbuf, 0, sizeof(GLCDbuf));                                         // clear the entire GLCD buffer (all 8 pages)
 }
 
 void GLCD_sendbuf(unsigned char RowAdr, unsigned char Rows) {
@@ -245,8 +247,7 @@ unsigned char GLCD_text_length2(const char *str) {
     unsigned char i = 0, length = 0;
 
     while (str[i]) {
-        length += font2[(int) str[i]][0] + 2;
-        //length += font2[(unsigned char)str[i]][0] + 2;
+        length += font2[(unsigned char) str[i]][0] + 2;
         i++;
     }
 
@@ -327,6 +328,37 @@ void GLCD_write_buf2(unsigned int c) {
 #endif
     GLCDx += 2;
 }
+
+#ifdef GLCD_HIRES_FONT
+// GLCDy-respecting double-height writer for the hand-drawn font2[] glyphs.
+// Writes each glyph to the page pair starting at GLCDy (top byte first, then
+// the bottom byte), so multiple lines can share one GLCD buffer.
+void GLCD_write_buf2_page(unsigned int c) {
+    unsigned char i = 1;
+    unsigned char w = font2[c][0];
+    unsigned int base = GLCDy * 128;
+
+    while ((i < (w * 2)) && (GLCDx < 128)) {
+        GLCDbuf[base + GLCDx] = font2[c][i];            // top half (rows 0-7)
+        GLCDbuf[base + 128 + GLCDx] = font2[c][i + 1];  // bottom half (rows 8-15)
+        i += 2;
+        GLCDx++;
+    }
+    GLCDx += 1;                                   // 1 px gap (font2 glyphs already include right padding)
+}
+
+void GLCD_write_buf_str2_page(const char *str, unsigned char y, unsigned char Options) {
+    unsigned char i = 0;
+
+    GLCDy = y;
+    if (Options == GLCD_ALIGN_CENTER) GLCDx = 64 - GLCD_text_length2(str) / 2;
+    else GLCDx = 0;
+
+    while (str[i]) {
+        GLCD_write_buf2_page((unsigned char) str[i++]);
+    }
+}
+#endif
 
 /**
  * Write a string to LCD buffer
@@ -460,10 +492,6 @@ void GLCDHelp(void)                                                             
 
 // called once a second
 void GLCD(void) {
-    unsigned char x;
-    unsigned int seconds, minutes;
-    static unsigned char energy_mains = 20; // X position
-    static unsigned char energy_ev = 74; // X position
     char Str[26];
     LCDTimer++;
     
@@ -571,7 +599,11 @@ void GLCD(void) {
     if (ErrorFlags) {                                                           // We switch backlight on, as we exit after displaying the error
         if (ErrorFlags & ~LESS_6A) BacklightTimer = BACKLIGHT;                  // Backlight timer is set to 120 seconds, except while waiting for enough (solar) power
 
-        if (ErrorFlags & (CT_NOCOMM | EV_NOCOMM | CIRCUIT_NOCOMM)) {                             // No serial communication for 10 seconds
+        // In SMART/SOLAR mode the dedicated power display stays on screen; the error is still
+        // reported via MQTT/REST, we just don't wipe the display with full-screen error text.
+        if (Mode == MODE_SMART || Mode == MODE_SOLAR) {
+            // fall through to the per-mode display below
+        } else if (ErrorFlags & (CT_NOCOMM | EV_NOCOMM | CIRCUIT_NOCOMM)) {                             // No serial communication for 10 seconds
             if (ErrorFlags & EV_NOCOMM) {
                 GLCD_print_buf2(0, (const char *) "CAN'T READ");
                 GLCD_print_buf2(2, (const char *) "EV METER");
@@ -822,178 +854,108 @@ void GLCD(void) {
         }
     }                                                                           // MODE SMART or SOLAR
     else if ((Mode == MODE_SMART) || (Mode == MODE_SOLAR)) {
+        BacklightTimer = BACKLIGHT;                                                 // keep the backlight on while this view is showing
 
-        memcpy (GLCDbuf, LCD_Flow, 512);                                        // copy Flow Menu to LCD buffer
+        // Solar power: use MQTT-set value if available, otherwise derive from Isum in SOLAR mode.
+        // Isum is in deci-Amps and negative means export (solar surplus).
+        int displaySolarPowerW = solarPowerW;
+        if (Mode == MODE_SOLAR && Isum < 0 && solarPowerW == 0) {
+            displaySolarPowerW = (-Isum / 10) * 230;                                 // 230 V nominal
+        }
 
-        if (Mode == MODE_SMART) {                                               // remove the Sun from the LCD buffer
-            for (x=0; x<13; x++) {
-                GLCDbuf[x+74u] = 0;
-                GLCDbuf[x+74u+128u] = 0;
+        int chargingPowerW = EVMeter.Type ? EVMeter.PowerMeasured : 0;              // EV charge power in Watts
+
+        // Home battery: current in deci-Amps, only valid if updated within the last 60s
+        time_t currentTime = time(NULL);
+        bool batteryFresh = homeBatteryLastUpdate && (currentTime - homeBatteryLastUpdate) <= 60;
+        int batteryPowerW = batteryFresh ? (homeBatteryCurrent / 10) * 230 : 0;
+
+        // Build the entire display in GLCDbuf then send all pages once.
+        // Each line writes to its own page-pair (via GLCDy), so there is no
+        // buffer aliasing between lines and the previous scratch-buffer
+        // duplication is eliminated.
+        GLCD_buffer_clr();                                                       // clear all 8 buffer pages
+
+        // Line 1 (rows 0-1): "Solar [sun] 1.2kW"
+        {
+            char modeStr[8];
+            char prod[12];
+            if (displaySolarPowerW >= 10000) {
+                sprintf(prod, "%dkW", displaySolarPowerW / 1000);
+            } else if (displaySolarPowerW >= 1000) {
+                sprintf(prod, "%d.%dkW", displaySolarPowerW / 1000, (displaySolarPowerW % 1000) / 100);
+            } else if (displaySolarPowerW > 0) {
+                sprintf(prod, "%dW", displaySolarPowerW);
+            } else {
+                strcpy(prod, "---");
             }
-        }
-        if (MaxSumMainsTimer) {                                                 // When Capacity limit is active, change Mains energy line
-            for (x=18; x<48; x+=4) {                                            // ______ -> _ _ _ _ 
-                GLCDbuf[x+(128*3)] = 0;
-                GLCDbuf[x+(128*3)+1] = 0;
+            switch (Mode) {
+                case MODE_SOLAR:  strcpy(modeStr, "Solar");  break;
+                case MODE_SMART:  strcpy(modeStr, "Smart");  break;
+                default:          strcpy(modeStr, "---");    break;
             }
+            sprintf(Str, "%s %c %s", modeStr, (unsigned char) LCD_ICON_SUN, prod);
         }
-        if (SolarStopTimer || MaxSumMainsTimer) {                               // display remaining time before charging is stopped
-            if (SolarStopTimer != 0 && (MaxSumMainsTimer == 0 || SolarStopTimer < MaxSumMainsTimer)) {
-                seconds = SolarStopTimer;
-            } else {                                                            // use either SolarStopTimer or MaxSumMainsTimer, whichever is
-                seconds = MaxSumMainsTimer;
-            }              
-            minutes = seconds / 60;
-            seconds = seconds % 60;
-            sprintf(Str, "%02u:%02u", minutes, seconds);
-            GLCD_write_buf_str(100, 0, Str, GLCD_ALIGN_LEFT);                   // print to buffer
-        } else {
-            for (x = 0; x < 8; x++) GLCDbuf[x + 92u] = 0;                       // remove the clock from the LCD buffer
-        }
+        GLCDy = 0;
+        GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
 
+        // Line 2 (rows 2-3): "[home] 85% 500W"
+        {
+            char hpwr[12];
+            char hsoc[8];
 
-        if (Isum < 0) {
-            energy_mains -= 3;                                                  // animate the flow of Mains energy on LCD.
-            if (energy_mains < 20) energy_mains = 44;                           // Only in Mode: Smart or Solar
-        } else {
-            energy_mains += 3;
-            if (energy_mains > 44) energy_mains = 20;
-        }
-
-        GLCDx = energy_mains;
-        GLCDy = 3;
-
-        if (abs(Isum) >3 ) GLCD_write_buf(0x0A, 0);                             // Show energy flow 'blob' between Grid and House
-                                                                                // If current flow is < 0.3A don't show the blob
-
-        if (EVMeter.Type) {                                                     // If we have a EV kWh meter configured, Show total charged energy in kWh on LCD.
-            sprintfl(Str, "%2d.%1dkWh", EVMeter.EnergyCharged, 3, 1);           // Will reset to 0.0kWh when charging cable reconnected, and state change from STATE B->C
-            GLCD_write_buf_str(89, 1, Str,GLCD_ALIGN_LEFT);                     // print to buffer
-        }
-
-        // Write number of used phases into the car
-   /*     if (Node[0].Phases) {
-            GLCDx = 110;
-            GLCDy = 2;
-            GLCD_write_buf(Node[0].Phases, 2 | GLCD_MERGE);
-        }
-*/
-        if (State == STATE_C) {
-            BacklightTimer = BACKLIGHT;
-
-            energy_ev += 3;                                                     // animate energy flow to EV
-            if (energy_ev > 89) energy_ev = 74;
-
-            GLCDx = energy_ev;
-            GLCDy = 3;
-            GLCD_write_buf(0x0A, 0);                                            // Show energy flow 'blob' between House and Car
-
-            if (LCDToggle && EVMeter.Type) {
-                if (EVMeter.PowerMeasured < 9950) {
-                    sprintfl(Str, "%1d.%1dkW", EVMeter.PowerMeasured, 3, 1);
+            if (batteryFresh) {
+                int absBatteryW = abs(batteryPowerW);
+                if (absBatteryW >= 10000) {
+                    sprintf(hpwr, "%dkW", absBatteryW / 1000);
+                } else if (absBatteryW >= 1000) {
+                    sprintf(hpwr, "%d.%dkW", absBatteryW / 1000, (absBatteryW % 1000) / 100);
                 } else {
-                    sprintfl(Str, "%dkW", EVMeter.PowerMeasured, 3, 0);
+                    sprintf(hpwr, "%dW", absBatteryW);
                 }
             } else {
-                sprintfl(Str, "%uA", Balanced[0], 1, 0);
+                strcpy(hpwr, "---");
             }
-            GLCD_write_buf_str(85, 2, Str, GLCD_ALIGN_CENTER);
-        } else if (State == STATE_A) {
-            // Remove line between House and Car
-            for (x = 73; x < 96; x++) GLCDbuf[3u * 128u + x] = 0;
-        }
 
-        if (LCDToggle && Mode == MODE_SOLAR) {                                  // Show Sum of currents when solar charging.
-            GLCDx = 41;
-            GLCDy = 1;
-            GLCD_write_buf(0x0B, 0);                                            // Sum symbol
-
-            sprintfl(Str, "%dA", Isum, 1, 0);
-            GLCD_write_buf_str(46, 2, Str, GLCD_ALIGN_RIGHT);                   // print to buffer
-        } else {                                                                // Displayed only in Smart and Solar modes
-            for (x = 0; x < 3; x++) {                                           // Display L1, L2 and L3 currents on LCD
-                sprintfl(Str, "%dA", MainsMeter.Irms[x], 1, 0);
-                GLCD_write_buf_str(46, x, Str, GLCD_ALIGN_RIGHT);               // print to buffer
-            }
-        }
-        GLCD_sendbuf(0, 4);                                                     // Copy LCD buffer to GLCD
-
-        glcd_clrln(4, 0);                                                       // Clear line 4
-        if (ErrorFlags & LESS_6A) {
-            if (!LCDToggle) {
-                GLCD_print_buf2(5, (const char *) "WAITING");
+            if (homeBatterySoc >= 0 && homeBatterySoc <= 100) {
+                sprintf(hsoc, "%d", homeBatterySoc);
             } else {
-                if (Mode == MODE_SMART) {
-                    GLCD_print_buf2(5, (const char *) "FOR POWER");
-                } else {
-                    GLCD_print_buf2(5, (const char *) "FOR SOLAR");
-                }
+                strcpy(hsoc, "---");
             }
 
-#if MODEM
-        } else if (State == STATE_MODEM_REQUEST || State == STATE_MODEM_WAIT || State == STATE_MODEM_DONE) {                                          // Modem states
-            GLCD_print_buf2(5, (const char *) "MODEM");
-#endif
-        } else if (AccessStatus == PAUSE) {
-                    GLCD_print_buf2(5, "PAUSE");
-        } else if (State != STATE_C) {
-                switch (Switching_Phases_C2) {
-                    case NO_SWITCH:
-                        sprintf(Str, "READY %u", ChargeDelay);
-                        if (!ChargeDelay) Str[5] = '\0';
-                        break;
-                    case GOING_TO_SWITCH_1P:
-                        sprintf(Str, "3P -> 1P %u", ChargeDelay);
-                        if (!ChargeDelay) Str[8] = '\0';
-                        break;
-                    case GOING_TO_SWITCH_3P:
-                        sprintf(Str, "1P -> 3P %u", ChargeDelay);
-                        if (!ChargeDelay) Str[8] = '\0';
-                        break;
-                }
-                GLCD_print_buf2(5, Str);
-        } else if (State == STATE_C) {
-            switch (LCDText) {
-                default:
-                    LCDText = 0;
-                    if (Mode != MODE_NORMAL) {
-                        if (Mode == MODE_SOLAR) sprintf(Str, "SOLAR");
-                            else sprintf(Str, "SMART");
-                            sprintf(Str+5," %uP", Nr_Of_Phases_Charging);
-                        GLCD_print_buf2(5, Str);
-                        break;
-                    } else LCDText++;
-                    // fall through
-                case 1:
-                    if (GridRelayOpen) {
-                        GLCD_print_buf2(5, (const char *) "LIMITED");
-                        break;
-                    } else LCDText++;
-                    // fall through
-                case 2:
-                    GLCD_print_buf2(5, (const char *) "CHARGING");
-                    break;
-                case 3:
-                    if (EVMeter.Type) {
-                        sprintfl(Str, "%d.%01d kW", EVMeter.PowerMeasured, 3, 1);
-                        GLCD_print_buf2(5, Str);
-                        break;
-                    } else LCDText++;
-                    // fall through
-                case 4:
-                    if (EVMeter.Type) {
-                        sprintfl(Str, "%d.%02d kWh", EVMeter.EnergyCharged, 3, 2);
-                        GLCD_print_buf2(5, Str);
-                        break;
-                    } else LCDText++;
-                    // fall through
-                case 5:
-                    sprintf(Str, "%u.%u A", Balanced[0] / 10, Balanced[0] % 10);
-                    GLCD_print_buf2(5, Str);
-                    break;
-            }
+            sprintf(Str, "%c %s%% %s", (unsigned char) LCD_ICON_HOME, hsoc, hpwr);
         }
-        glcd_clrln(7, 0x00);
+        GLCDy = 2;
+        GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
+
+        // Line 3 (rows 4-5): "[car] 60% 3456W"
+        {
+            char epwr[12];
+            char esoc[8];
+
+            if (chargingPowerW >= 10000) {
+                sprintf(epwr, "%dkW", chargingPowerW / 1000);
+            } else if (chargingPowerW >= 1000) {
+                sprintf(epwr, "%d.%dkW", chargingPowerW / 1000, (chargingPowerW % 1000) / 100);
+            } else if (chargingPowerW > 0) {
+                sprintf(epwr, "%dW", chargingPowerW);
+            } else {
+                strcpy(epwr, "---");
+            }
+
+            if (evSoc >= 0 && evSoc <= 100) {
+                sprintf(esoc, "%d", evSoc);
+            } else {
+                strcpy(esoc, "---");
+            }
+
+            sprintf(Str, "%c %s%% %s", (unsigned char) LCD_ICON_CAR, esoc, epwr);
+        }
+        GLCDy = 4;
+        GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
+
+        // Send all 8 pages to the display in one shot.
+        GLCD_sendbuf(0, 8);
     } // End Mode SMART or SOLAR
 
 }

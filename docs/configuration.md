@@ -332,6 +332,9 @@ Valid topics you can publish to are:
 /Set/MainsMeter
 /Set/EVMeter
 /Set/HomeBatteryCurrent
+/Set/HomeBatterySoc       Home battery State of Charge (0-100%, integer value)
+/Set/EVSoC                EV/car battery State of Charge (0-100%, integer value)
+/Set/SolarPower           Solar power in Watts (integer value, negative for export)
 /Set/RequiredEVCCID
 /Set/ColorOff
 /Set/ColorNormal

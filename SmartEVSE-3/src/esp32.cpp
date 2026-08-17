@@ -13,6 +13,11 @@ char EVCCID[32];                                                            // C
 char RequiredEVCCID[32] = "";                                               // Required EVCCID before allowing charging
 #endif
 
+// SoC values set via MQTT
+int8_t homeBatterySoc = -1;                                                 // Home battery State of Charge (0-100%, -1 = unavailable)
+int8_t evSoc = -1;                                                          // EV/car battery State of Charge (0-100%, -1 = unavailable)
+int solarPowerW = 0;                                                        // Solar power in Watts (set via MQTT or calculated)
+
 #ifdef SMARTEVSE_VERSION //ESP32
 
 #include <ArduinoJson.h>
@@ -768,6 +773,21 @@ void mqtt_receive_callback(const String topic, const String payload) {
 #if SMARTEVSE_VERSION >= 40
         SEND_TO_CH32(homeBatteryCurrent); //we set homeBatteryLastUpdate on CH32 on receipt
 #endif
+    } else if (topic == MQTTprefix + "/Set/HomeBatterySoc") {
+        // Set home battery State of Charge (0-100%)
+        int8_t soc = payload.toInt();
+        if (soc >= 0 && soc <= 100) {
+            homeBatterySoc = soc;
+        }
+    } else if (topic == MQTTprefix + "/Set/EVSoC") {
+        // Set EV/car battery State of Charge (0-100%)
+        int8_t soc = payload.toInt();
+        if (soc >= 0 && soc <= 100) {
+            evSoc = soc;
+        }
+    } else if (topic == MQTTprefix + "/Set/SolarPower") {
+        // Set solar power in Watts (can be negative for export, positive for import)
+        solarPowerW = payload.toInt();
 #if MODEM
     } else if (topic == MQTTprefix + "/Set/RequiredEVCCID") {
         strncpy(RequiredEVCCID, payload.c_str(), sizeof(RequiredEVCCID));
