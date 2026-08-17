@@ -906,12 +906,15 @@ void GLCD(void) {
 
             if (batteryFresh) {
                 int absBatteryW = abs(batteryPowerW);
+                char batSign = (batteryPowerW < 0) ? '-' : '+';
                 if (absBatteryW >= 10000) {
-                    sprintf(hpwr, "%dkW", absBatteryW / 1000);
+                    sprintf(hpwr, "%c%dkW", batSign, absBatteryW / 1000);
                 } else if (absBatteryW >= 1000) {
-                    sprintf(hpwr, "%d.%dkW", absBatteryW / 1000, (absBatteryW % 1000) / 100);
+                    sprintf(hpwr, "%c%d.%dkW", batSign, absBatteryW / 1000, (absBatteryW % 1000) / 100);
+                } else if (absBatteryW > 0) {
+                    sprintf(hpwr, "%c%dW", batSign, absBatteryW);
                 } else {
-                    sprintf(hpwr, "%dW", absBatteryW);
+                    sprintf(hpwr, "0W");
                 }
             } else {
                 strcpy(hpwr, "---");
