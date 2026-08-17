@@ -663,197 +663,7 @@ void GLCD(void) {
         return;
     }
 
-                                                                                // MODE NORMAL
-    if (Mode == MODE_NORMAL || AccessStatus == OFF) {
-
-        glcd_clrln(0, 0x00);
-        glcd_clrln(1, 0x04);                                                    // horizontal line
-        glcd_clrln(6, 0x10);                                                    // horizontal line
-        glcd_clrln(7, 0x00);
-
-#if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
-        if (OcppMode &&                                          // OCPP enabled
-                (getItemValue(MENU_RFIDREADER) == 6 || getItemValue(MENU_RFIDREADER) == 0) && // RFID in OCPP mode or disabled
-                ocppHasTxNotification()) {                                      // There is an OCPP event to display
-            BacklightTimer = BACKLIGHT;
-            switch(ocppGetTxNotification()) {
-                case MicroOcpp::TxNotification::Authorized:
-                    GLCD_print_buf2(2, (const char *) "ACCEPTED");
-                    GLCD_print_buf2(4, (const char *) "RFID CARD");
-                    break;
-                case MicroOcpp::TxNotification::AuthorizationRejected:
-                case MicroOcpp::TxNotification::DeAuthorized:
-                    GLCD_print_buf2(2, (const char *) "INVALID");
-                    GLCD_print_buf2(4, (const char *) "RFID CARD");
-                    break;
-                case MicroOcpp::TxNotification::AuthorizationTimeout:
-                    GLCD_print_buf2(2, (const char *) "OFFLINE");
-                    GLCD_print_buf2(4, (const char *) "TRY LATER");
-                    break;
-                case MicroOcpp::TxNotification::ReservationConflict:
-                    GLCD_print_buf2(2, (const char *) "BLOCKED BY");
-                    GLCD_print_buf2(4, (const char *) "RESERVATION");
-                    break;
-                case MicroOcpp::TxNotification::ConnectionTimeout:
-                    GLCD_print_buf2(2, (const char *) "TIMEOUT");
-                    GLCD_print_buf2(4, (const char *) "TRY AGAIN");
-                    break;
-                case MicroOcpp::TxNotification::RemoteStart:
-                    if (!ocppIsConnectorPlugged()) {
-                        GLCD_print_buf2(2, (const char *) "PLUG IN");
-                        GLCD_print_buf2(4, (const char *) "VEHICLE");
-                    }
-                    break;
-                case MicroOcpp::TxNotification::StartTx:
-                    GLCD_print_buf2(2, (const char *) "STARTED");
-                    GLCD_print_buf2(4, (const char *) "TRANSACTION");
-                    break;
-                case MicroOcpp::TxNotification::StopTx:
-                    GLCD_print_buf2(2, (const char *) "STOPPED");
-                    GLCD_print_buf2(4, (const char *) "TRANSACTION");
-                    break;
-                default:
-                    break;
-            }
-        } else
-#endif //ENABLE_OCPP
-        if (ErrorFlags & LESS_6A && AccessStatus == ON) {
-            GLCD_print_buf2(2, (const char *) "WAITING");
-            GLCD_print_buf2(4, (const char *) "FOR POWER");
-#if MODEM
-        } else if (State == STATE_MODEM_REQUEST || State == STATE_MODEM_WAIT || State == STATE_MODEM_DONE) {                                          // Modem states
-
-            BacklightTimer = BACKLIGHT;
-
-            GLCD_print_buf2(2, (const char *) "MODEM");
-            GLCD_print_buf2(4, (const char *) "COMM");
-        } else if (State == STATE_MODEM_DENIED) {                               // Modem denied state
-
-            BacklightTimer = BACKLIGHT;
-
-            GLCD_print_buf2(2, (const char *) "MODEM");
-            GLCD_print_buf2(4, (const char *) "DENIED");
-#endif
-        } else if (State == STATE_C) {                                          // STATE C
-            
-            BacklightTimer = BACKLIGHT;
-            
-            if (GridRelayOpen)
-                GLCD_print_buf2(2, (const char *) "LIMITED");
-            else
-                GLCD_print_buf2(2, (const char *) "CHARGING");
-            sprintf(Str, "%u.%uA",Balanced[0] / 10, Balanced[0] % 10);
-            GLCD_print_buf2(4, Str);
-        } else {                                                                // STATE A and STATE B
-            if (AccessStatus == ON) {
-                GLCD_print_buf2(2, (const char *) "READY TO");
-                sprintf(Str, "CHARGE %u", ChargeDelay);
-                if (ChargeDelay) {
-                    // BacklightTimer = BACKLIGHT;
-                } else Str[6] = '\0';
-                GLCD_print_buf2(4, Str);
-            } else if (AccessStatus == PAUSE) {
-                GLCD_print_buf2(2, (const char *) "PAUSE");
-            } else {
-#if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
-                if (OcppMode &&                                  // OCPP enabled
-                        (getItemValue(MENU_RFIDREADER) == 6 || getItemValue(MENU_RFIDREADER) == 0)) { // RFID in OCPP mode or disabled
-                    switch (getChargePointStatus()) {
-                        case ChargePointStatus_Available:
-                            GLCD_print_buf2(2, (const char *) "AVAILABLE");
-                            GLCD_print_buf2(4, (const char *) "");
-                            break;
-                        case ChargePointStatus_Preparing:
-                            if (!ocppIsConnectorPlugged()) {
-                                GLCD_print_buf2(2, (const char *) "PLUG IN");
-                                GLCD_print_buf2(4, (const char *) "VEHICLE");
-                            } else {
-                                GLCD_print_buf2(2, (const char *) "PLEASE");
-                                GLCD_print_buf2(4, (const char *) "AUTHORIZE");
-                            }
-                            break;
-                        case ChargePointStatus_Charging:
-                        case ChargePointStatus_SuspendedEVSE:
-                        case ChargePointStatus_SuspendedEV:
-                            // Should not be reached (Access_bit or STATE_C above prevail)
-                            GLCD_print_buf2(2, (const char *) "CHARGING");
-                            GLCD_print_buf2(4, (const char *) "IN PROGRESS");
-                            break;
-                        case ChargePointStatus_Finishing:
-                            if (ocppLockingTxDefined()) {
-                                GLCD_print_buf2(2, (const char *) "UNLOCK BY");
-                                GLCD_print_buf2(4, (const char *) "RFID CARD");
-                            } else {
-                                GLCD_print_buf2(2, (const char *) "FINISHED");
-                                GLCD_print_buf2(4, (const char *) "CHARGING");
-                            }
-                            break;
-                        case ChargePointStatus_Reserved:
-                            GLCD_print_buf2(2, (const char *) "RESERVED");
-                            GLCD_print_buf2(4, (const char *) "");
-                            break;
-                        case ChargePointStatus_Unavailable:
-                            GLCD_print_buf2(2, (const char *) "OUT OF");
-                            GLCD_print_buf2(4, (const char *) "ORDER");
-                            break;
-                        case ChargePointStatus_Faulted:
-                            GLCD_print_buf2(2, (const char *) "NO SERVICE");
-                            GLCD_print_buf2(4, (const char *) "");
-                            break;
-                        default:
-                            break;
-                    }
-                } else
-#endif //ENABLE_OCPP
-                if (getItemValue(MENU_RFIDREADER)) {
-                    if (RFIDstatus == 7) {
-                        GLCD_print_buf2(2, (const char *) "INVALID");
-                        GLCD_print_buf2(4, (const char *) "RFID CARD");
-                    } else {
-                        GLCD_print_buf2(2, (const char *) "PRESENT");
-                        GLCD_print_buf2(4, (const char *) "RFID CARD");
-                    }
-                } else {
-                    if (DelayedStartTime.epoch2) {
-                        GLCD_print_buf2(2, (const char *) "STARTING @");
-#define _24H 24*60*60
-#define _WEEK 7*_24H
-                        String StrFormat;
-                        if (DelayedStartTime.diff <= _24H)
-                            //if it starts in the next 24 hours, just print hours : minutes
-                            StrFormat = "%R";
-                        else {
-                            //if it starts in the next week, print day of week, day of month, hours: minutes
-                            if (DelayedStartTime.diff <= _WEEK)
-                                StrFormat = "%a %e %R";
-                            else
-                            //if it starts later, print day of week, day of month, month, year perhaps scrolling hours/minutes?
-                                StrFormat = "%a %e %b";
-                                //StrFormat = "%a %e %b '%C %R";
-                        }
-                        if (DelayedStartTime.epoch2 && LocalTimeSet && DelayedStartTime.epoch2 != DelayedStartTime_Old) {
-                            time_t epoch = DelayedStartTime.epoch2 + EPOCH2_OFFSET;
-                            DelayedStartTimeTM = *localtime(&epoch);
-                        }
-                        if (!strftime(Str, sizeof(Str), StrFormat.c_str(), &DelayedStartTimeTM))
-                            sprintf(Str, "later...");
-                        GLCD_print_buf2(4, Str);
-                        //print current time
-                        if (LocalTimeSet) {
-                            GLCD_buffer_clr();
-                            if (strftime(Str, 26, "%a %e %b '%y %R", &timeinfo))
-                                GLCD_write_buf_str(0,0, Str, GLCD_ALIGN_LEFT);
-                            GLCD_sendbuf(7, 1);
-                        }
-                    } else {
-                        GLCD_print_buf2(2, (const char *) "ACCESS");
-                        GLCD_print_buf2(4, (const char *) "DENIED");
-                    }
-                }
-            }
-        }
-    }                                                                           // MODE SMART or SOLAR
-    else if ((Mode == MODE_SMART) || (Mode == MODE_SOLAR)) {
+                                                                                {                                                           // all modes: live power display
         BacklightTimer = BACKLIGHT;                                                 // keep the backlight on while this view is showing
 
         // Solar power: use MQTT-set value if available, otherwise derive from Isum in SOLAR mode.
@@ -889,7 +699,10 @@ void GLCD(void) {
             } else {
                 strcpy(prod, "---");
             }
-            switch (Mode) {
+            if (AccessStatus == OFF)
+                strcpy(modeStr, "Off");
+            else switch (Mode) {
+                case MODE_NORMAL: strcpy(modeStr, "Normal"); break;
                 case MODE_SOLAR:  strcpy(modeStr, "Solar");  break;
                 case MODE_SMART:  strcpy(modeStr, "Smart");  break;
                 default:          strcpy(modeStr, "---");    break;
@@ -959,7 +772,7 @@ void GLCD(void) {
 
         // Send all 8 pages to the display in one shot.
         GLCD_sendbuf(0, 8);
-    } // End Mode SMART or SOLAR
+    } // all modes: live power display
 
 }
 
