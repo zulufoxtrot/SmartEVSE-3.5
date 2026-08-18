@@ -14,9 +14,9 @@ char RequiredEVCCID[32] = "";                                               // R
 #endif
 
 // SoC values set via MQTT
-int8_t homeBatterySoc = -1;                                                 // Home battery State of Charge (0-100%, -1 = unavailable)
 int8_t evSoc = -1;                                                          // EV/car battery State of Charge (0-100%, -1 = unavailable)
 int solarPowerW = 0;                                                        // Solar power in Watts (set via MQTT or calculated)
+// homeBatterySoc and the battery threshold gate variables are defined in main.cpp (also used by the CH32)
 
 #ifdef SMARTEVSE_VERSION //ESP32
 
@@ -306,6 +306,9 @@ extern bool phasesLastUpdateFlag;
 extern int16_t IrmsOriginal[3];
 extern int16_t homeBatteryCurrent;
 extern time_t homeBatteryLastUpdate;
+extern int8_t homeBatterySoc;
+extern uint8_t homeBatterySoCThreshold;
+extern bool homeBatteryThresholdEnabled;
 // set by EXTERNAL logic through MQTT/REST to indicate cheap tariffs ahead until unix time indicated
 extern uint8_t ColorOff[3] ;
 extern uint8_t ColorNormal[3] ;
@@ -778,6 +781,31 @@ void mqtt_receive_callback(const String topic, const String payload) {
         int8_t soc = payload.toInt();
         if (soc >= 0 && soc <= 100) {
             homeBatterySoc = soc;
+#if SMARTEVSE_VERSION >= 40
+            SEND_TO_CH32(homeBatterySoc); // CH32 uses it for the battery threshold gate
+#endif
+        }
+    } else if (topic == MQTTprefix + "/Set/HomeBatterySoCThreshold") {
+        // Set home battery SoC threshold (0-100%) above which the car may start charging in SOLAR mode
+        int8_t threshold = payload.toInt();
+        if (threshold >= 0 && threshold <= 100) {
+            homeBatterySoCThreshold = threshold;
+#if SMARTEVSE_VERSION >= 40
+            SEND_TO_CH32(homeBatterySoCThreshold);
+#endif
+        }
+    } else if (topic == MQTTprefix + "/Set/HomeBatteryThresholdEnabled") {
+        // Enable/disable the home battery SoC threshold gate (only applies in SOLAR mode)
+        if (payload == "0" || payload == "false") {
+            homeBatteryThresholdEnabled = false;
+#if SMARTEVSE_VERSION >= 40
+            SEND_TO_CH32(homeBatteryThresholdEnabled);
+#endif
+        } else if (payload == "1" || payload == "true") {
+            homeBatteryThresholdEnabled = true;
+#if SMARTEVSE_VERSION >= 40
+            SEND_TO_CH32(homeBatteryThresholdEnabled);
+#endif
         }
     } else if (topic == MQTTprefix + "/Set/EVSoC") {
         // Set EV/car battery State of Charge (0-100%)
@@ -1154,6 +1182,9 @@ void mqttPublishData() {
         }
         if (homeBatteryLastUpdate)
             MQTTclient.publish(MQTTprefix + "/HomeBatteryCurrent", homeBatteryCurrent, false, 0);
+        MQTTclient.publish(MQTTprefix + "/HomeBatterySoC", homeBatterySoc, false, 0);
+        MQTTclient.publish(MQTTprefix + "/HomeBatterySoCThreshold", homeBatterySoCThreshold, false, 0);
+        MQTTclient.publish(MQTTprefix + "/HomeBatteryThresholdEnabled", homeBatteryThresholdEnabled, false, 0);
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
         MQTTclient.publish(MQTTprefix + "/OCPP", OcppMode ? "Enabled" : "Disabled", true, 0);
         MQTTclient.publish(MQTTprefix + "/OCPPConnection", (OcppWsClient && OcppWsClient->isConnected()) ? "Connected" : "Disconnected", false, 0);
@@ -1923,6 +1954,11 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
 
         doc["home_battery"]["current"] = homeBatteryCurrent;
         doc["home_battery"]["last_update"] = homeBatteryLastUpdate;
+        doc["home_battery"]["soc"] = homeBatterySoc;
+        doc["home_battery"]["soc_threshold"] = homeBatterySoCThreshold;
+        doc["home_battery"]["threshold_enabled"] = homeBatteryThresholdEnabled;
+        doc["home_battery"]["gate_blocking"] = (Mode == MODE_SOLAR) && homeBatteryThresholdEnabled &&
+                                               (homeBatterySoc < 0 || homeBatterySoc < (int8_t) homeBatterySoCThreshold);
 
         doc["ev_meter"]["description"] = EMConfig[EVMeter.Type].Desc;
         doc["ev_meter"]["address"] = EVMeter.Address;

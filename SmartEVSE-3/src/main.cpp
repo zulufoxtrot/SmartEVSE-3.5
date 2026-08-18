@@ -253,6 +253,12 @@ bool phasesLastUpdateFlag = false;
 int16_t IrmsOriginal[3]={0, 0, 0};
 int16_t homeBatteryCurrent = 0;
 time_t homeBatteryLastUpdate = 0; // Time in seconds since epoch
+int8_t homeBatterySoc = -1;        // Home battery State of Charge (0-100%, -1 = unavailable)
+uint8_t homeBatterySoCThreshold = 0;     // Start charging the car in SOLAR mode when home battery SoC >= this (0-100%)
+bool homeBatteryThresholdEnabled = false; // Enable the home battery SoC threshold gate (SOLAR mode only)
+bool homeBatteryThresholdReached = false; // Hysteresis latch: battery has been at/above the threshold
+
+bool solarBatteryGateBlocks(void); // forward declaration (defined near getBatteryCurrent)
 // set by EXTERNAL logic through MQTT/REST to indicate cheap tariffs ahead until unix time indicated
 uint8_t ColorOff[3] = {0, 0, 0};          // off
 uint8_t ColorNormal[3] = {0, 255, 0};   // Green
@@ -1065,6 +1071,10 @@ char IsCurrentAvailable(void) {
     // Charging will start after the timeout (chargedelay) period has ended
      // Only when StartCurrent configured or Node MinCurrent detected or Node inactive
     if (Mode == MODE_SOLAR) {                                                   // no active EVSE yet?
+        if (solarBatteryGateBlocks()) {
+            _LOG_D("Battery threshold not reached, waiting for home battery. ActiveEVSE=%u, homeBatterySoc=%d, threshold=%u.\n", ActiveEVSE, homeBatterySoc, homeBatterySoCThreshold);
+            return 0;
+        }
         if (ActiveEVSE == 0 && Isum >= ((signed int)StartCurrent *-10)) {
             _LOG_D("No current available StartCurrent line %d. ActiveEVSE=%u, TotalCurrent=%d.%dA, StartCurrent=%uA, Isum=%d.%dA, ImportCurrent=%uA.\n", __LINE__, ActiveEVSE, TotalCurrent/10, abs(TotalCurrent%10), StartCurrent, Isum/10, abs(Isum%10), ImportCurrent);
             return 0;
@@ -1279,6 +1289,15 @@ void CalcBalancedCurrent(char mod) {
                     }
                 }
             }                                                                   // we already corrected Isetbalance in case of NOT enough power MaxCircuit/MaxMains
+            if (solarBatteryGateBlocks()) {                                     // home battery dropped below threshold, stop charging now
+                if (State == STATE_C) {
+                    _LOG_A("Home battery below threshold, stopping charging. homeBatterySoc=%d, threshold=%u.\n", homeBatterySoc, homeBatterySoCThreshold);
+                    setState(STATE_C1);                 // tell EV to stop charging
+                    setErrorFlags(LESS_6A);             // keep charging suppressed until the threshold is reached again
+                }
+                IsetBalanced = 0;                       // don't ramp up current while gated
+                setSolarStopTimer(0);
+            }
             _LOG_V("Checkpoint 3 Solar Isetbalanced=%d.%d A, IsumImport=%d.%d, Isum=%d.%d, ImportCurrent=%u.\n", IsetBalanced/10, abs(IsetBalanced%10), IsumImport/10, abs(IsumImport%10), Isum/10, abs(Isum%10), ImportCurrent);
         } //end MODE_SOLAR
         else { // MODE_SMART
@@ -2413,6 +2432,9 @@ void CheckSerialComm(void) {
 
     SET_ON_RECEIVE(ModemStage:, ModemStage)
     SET_ON_RECEIVE(homeBatteryCurrent:, homeBatteryCurrent); if (ret) homeBatteryLastUpdate=time(NULL);
+    SET_ON_RECEIVE(homeBatterySoc:, homeBatterySoc)
+    SET_ON_RECEIVE(homeBatterySoCThreshold:, homeBatterySoCThreshold)
+    SET_ON_RECEIVE(homeBatteryThresholdEnabled:, tmp); if (ret) homeBatteryThresholdEnabled = tmp ? true : false;
 
     //these variables are owned by CH32 and copies are sent to ESP32:
     SET_ON_RECEIVE(SolarStopTimer:, SolarStopTimer)
@@ -3766,6 +3788,18 @@ int16_t getBatteryCurrent(void) {
     } else {
         return 0;                                       // don't touch homeBatteryCurrent, just return 0
     }
+}
+
+// When the home battery SoC threshold gate is enabled, delay/stall car charging
+// in SOLAR mode until the home battery has charged to (at least) the threshold.
+// A 2% deadband prevents flapping: after the battery has reached the threshold,
+// charging continues until the SoC drops below threshold-2%.
+bool solarBatteryGateBlocks(void) {
+    if (!homeBatteryThresholdEnabled || Mode != MODE_SOLAR) return false;
+    if (homeBatterySoc < 0) return true;                        // SoC unknown -> hold charging
+    if (homeBatterySoc >= (int8_t) homeBatterySoCThreshold) homeBatteryThresholdReached = true;
+    else if (homeBatterySoc <= (int8_t) homeBatterySoCThreshold - 2) homeBatteryThresholdReached = false;
+    return !homeBatteryThresholdReached;
 }
 
 
