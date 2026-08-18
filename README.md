@@ -3,7 +3,46 @@ SmartEVSE v3
 
 Smart Electric Vehicle Charge Controller
 
-![Image of SmartEVSE](/pictures/SmartEVSEv3.png)
+ # zulufoxtrot fork changes
+
+This fork implements a few modifications to fit my needs:
+
+### New LCD layout
+
+![new_lcd.png](pictures/new_lcd.png)
+
+- Displays:
+  - Solar power
+  - home battery power (+/-)
+  - home battery SoC
+  - EV charging power
+  - EV SoC
+- Bigger font size
+- Visible in all modes (Normal, Solar, Smart, Off)
+
+### Home battery priority
+
+In Solar mode, if this setting is enabled, the charger will wait for the home battery to reach a given threshold before charging the EV.
+
+If the home battery dips below the threshold while the car is charging, charging is stopped.
+
+As long as we are below the target SoC, the LCD displays an hourglass ⌛️ icon next to the mode.
+
+This is very useful to prioritize power allocations in your home: Home first, then EV once the home has enough energy. 
+
+The setting and threshold are controlled through MQTT:
+
+- /Set/HomeBatterySoCThreshold: integer, 0 to 100
+- /Set/HomeBatteryThresholdEnabled: integer, 1 = on, 0 or unset = off
+
+### Additional MQTT fields
+
+These fields are required for the new LCD data.
+
+- /Set/HomeBatterySoc: current home battery SoC. integer, 0 to 100
+- /Set/EVSoC: current EV SoC. integer, 0 to 100
+- /Set/SolarPower: current PV power. watts, integer
+
 
 # What is it?
 
