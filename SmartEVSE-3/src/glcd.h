@@ -37,6 +37,7 @@
 #define LCD_ICON_HOME 0x80
 #define LCD_ICON_CAR  0x81
 #define LCD_ICON_SUN  0x82
+#define LCD_ICON_HOURGLASS 0x83
 
 extern void GLCDHelp(void);
 extern void GLCD(void);

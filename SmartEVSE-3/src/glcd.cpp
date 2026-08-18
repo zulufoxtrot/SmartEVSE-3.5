@@ -96,6 +96,8 @@ extern uint8_t RCMTestCounter;
 extern int16_t homeBatteryCurrent;
 extern time_t homeBatteryLastUpdate;
 extern int8_t homeBatterySoc;                                                 // Home battery SoC (0-100%, -1 = unavailable)
+extern uint8_t homeBatterySoCThreshold;                                       // Home battery SoC threshold for SOLAR charging gate
+extern bool homeBatteryThresholdEnabled;                                      // Enable the home battery SoC threshold gate
 extern int8_t evSoc;                                                          // EV/car battery SoC (0-100%, -1 = unavailable)
 extern int solarPowerW;                                                       // Solar power in Watts (set via MQTT or calculated)
 
@@ -686,9 +688,30 @@ void GLCD(void) {
         // duplication is eliminated.
         GLCD_buffer_clr();                                                       // clear all 8 buffer pages
 
-        // Line 1 (rows 0-1): "Solar [sun] 1.2kW"
+        // Line 1 (rows 0-1): "Solar" (+ hourglass when the SoC threshold gate blocks)
         {
             char modeStr[8];
+            if (AccessStatus == OFF)
+                strcpy(modeStr, "Off");
+            else switch (Mode) {
+                case MODE_NORMAL: strcpy(modeStr, "Normal"); break;
+                case MODE_SOLAR:  strcpy(modeStr, "Solar");  break;
+                case MODE_SMART:  strcpy(modeStr, "Smart");  break;
+                default:          strcpy(modeStr, "---");    break;
+            }
+            // hourglass marker: the SOLAR battery threshold gate is holding charging back
+            bool batteryGateBlocking = homeBatteryThresholdEnabled && (Mode == MODE_SOLAR) &&
+                                       (homeBatterySoc < 0 || homeBatterySoc < (int8_t) homeBatterySoCThreshold);
+            if (batteryGateBlocking)
+                sprintf(Str, "%s %c", modeStr, (unsigned char) LCD_ICON_HOURGLASS);
+            else
+                strcpy(Str, modeStr);
+        }
+        GLCDy = 0;
+        GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
+
+        // Line 2 (rows 2-3): "[sun] 1.2kW"
+        {
             char prod[12];
             if (displaySolarPowerW >= 10000) {
                 sprintf(prod, "%dkW", displaySolarPowerW / 1000);
@@ -699,20 +722,12 @@ void GLCD(void) {
             } else {
                 strcpy(prod, "---");
             }
-            if (AccessStatus == OFF)
-                strcpy(modeStr, "Off");
-            else switch (Mode) {
-                case MODE_NORMAL: strcpy(modeStr, "Normal"); break;
-                case MODE_SOLAR:  strcpy(modeStr, "Solar");  break;
-                case MODE_SMART:  strcpy(modeStr, "Smart");  break;
-                default:          strcpy(modeStr, "---");    break;
-            }
-            sprintf(Str, "%s %c %s", modeStr, (unsigned char) LCD_ICON_SUN, prod);
+            sprintf(Str, "%c %s", (unsigned char) LCD_ICON_SUN, prod);
         }
-        GLCDy = 0;
+        GLCDy = 2;
         GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
 
-        // Line 2 (rows 2-3): "[home] 85% 500W"
+        // Line 3 (rows 4-5): "[home] 85% 500W"
         {
             char hpwr[12];
             char hsoc[8];
@@ -741,10 +756,10 @@ void GLCD(void) {
 
             sprintf(Str, "%c %s%% %s", (unsigned char) LCD_ICON_HOME, hsoc, hpwr);
         }
-        GLCDy = 2;
+        GLCDy = 4;
         GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
 
-        // Line 3 (rows 4-5): "[car] 60% 3456W"
+        // Line 4 (rows 6-7): "[car] 60% 3456W"
         {
             char epwr[12];
             char esoc[8];
@@ -767,7 +782,7 @@ void GLCD(void) {
 
             sprintf(Str, "%c %s%% %s", (unsigned char) LCD_ICON_CAR, esoc, epwr);
         }
-        GLCDy = 4;
+        GLCDy = 6;
         GLCD_write_buf_str2_page(Str, GLCDy, GLCD_ALIGN_LEFT);
 
         // Send all 8 pages to the display in one shot.
