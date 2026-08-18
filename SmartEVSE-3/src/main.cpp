@@ -259,6 +259,7 @@ bool homeBatteryThresholdEnabled = false; // Enable the home battery SoC thresho
 bool homeBatteryThresholdReached = false; // Hysteresis latch: battery has been at/above the threshold
 
 bool solarBatteryGateBlocks(void); // forward declaration (defined near getBatteryCurrent)
+bool solarBatteryDraining(void);   // forward declaration (defined near getBatteryCurrent)
 // set by EXTERNAL logic through MQTT/REST to indicate cheap tariffs ahead until unix time indicated
 uint8_t ColorOff[3] = {0, 0, 0};          // off
 uint8_t ColorNormal[3] = {0, 255, 0};   // Green
@@ -1346,12 +1347,13 @@ void CalcBalancedCurrent(char mod) {
             if (Mode == MODE_SOLAR) {
                 // ----------- Check to see if we have to continue charging on solar power alone ----------
                                               // Importing too much?
-                if (ActiveEVSE && IsumImport > 0 &&
+                if (ActiveEVSE && (solarBatteryDraining() ||
+                        IsumImport > 0 &&
                         // Would a stop free so much current that StartCurrent would immediately restart charging?
                         // Isum and StartCurrent are both sum-of-phases, so no phase multiplication needed
                         (Isum > (ActiveEVSE * MinCurrent - StartCurrent) * 10 ||
                          // don't apply that rule if we are 3P charging and we could switch to 1P
-                         (Nr_Of_Phases_Charging > 1 && EnableC2 == AUTO))) {
+                         (Nr_Of_Phases_Charging > 1 && EnableC2 == AUTO)))) {
                     if (Nr_Of_Phases_Charging > 1 && EnableC2 == AUTO && State == STATE_C) {        // Only for Master when charging, Nodes are not supported yet
                         // not enough current for 3-phase operation; we can switch to 1-phase after some time
                         // start solar stop timer
@@ -3800,6 +3802,17 @@ bool solarBatteryGateBlocks(void) {
     if (homeBatterySoc >= (int8_t) homeBatterySoCThreshold) homeBatteryThresholdReached = true;
     else if (homeBatterySoc <= (int8_t) homeBatterySoCThreshold - 2) homeBatteryThresholdReached = false;
     return !homeBatteryThresholdReached;
+}
+
+
+// The car (or house) is pulling from the home battery: the battery is discharging
+// and the data is fresh. Only meaningful in SOLAR mode (homeBatteryCurrent is zeroed
+// outside of it). This starts the same SolarStopTimer countdown as grid import.
+bool solarBatteryDraining(void) {
+    if (Mode != MODE_SOLAR) return false;
+    if (!homeBatteryLastUpdate) return false;
+    if ((time(NULL) - homeBatteryLastUpdate) > 60) return false; // stale data
+    return homeBatteryCurrent < 0;
 }
 
 
