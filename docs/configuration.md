@@ -337,7 +337,10 @@ Valid topics you can publish to are:
                          In SOLAR mode, only start charging the car when the home battery SoC
                          has reached this threshold (0-100%, integer value). The car stops
                          charging again once the SoC drops below (threshold - 5)% (5% deadband
-                         to prevent flapping). Requires /Set/HomeBatteryThresholdEnabled = 1.
+                         to prevent flapping). When the threshold is >= 95%, a 5% tolerance is
+                         applied (threshold - 5%), because the home battery charger stops
+                         recharging the battery near full to prevent over-cycling.
+                         Requires /Set/HomeBatteryThresholdEnabled = 1.
 /Set/HomeBatteryThresholdEnabled
                          Enable (1) or disable (0) the home battery SoC threshold gate for
                          SOLAR mode. When enabled, charging waits until the home battery has

@@ -308,6 +308,7 @@ extern int16_t homeBatteryCurrent;
 extern time_t homeBatteryLastUpdate;
 extern int8_t homeBatterySoc;
 extern uint8_t homeBatterySoCThreshold;
+extern int8_t homeBatteryEffectiveSoCThreshold(void);
 extern bool homeBatteryThresholdEnabled;
 // set by EXTERNAL logic through MQTT/REST to indicate cheap tariffs ahead until unix time indicated
 extern uint8_t ColorOff[3] ;
@@ -1958,7 +1959,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["home_battery"]["soc_threshold"] = homeBatterySoCThreshold;
         doc["home_battery"]["threshold_enabled"] = homeBatteryThresholdEnabled;
         doc["home_battery"]["gate_blocking"] = (Mode == MODE_SOLAR) && homeBatteryThresholdEnabled &&
-                                               (homeBatterySoc < 0 || homeBatterySoc < (int8_t) homeBatterySoCThreshold);
+                                               (homeBatterySoc < 0 || homeBatterySoc < homeBatteryEffectiveSoCThreshold());
 
         doc["ev_meter"]["description"] = EMConfig[EVMeter.Type].Desc;
         doc["ev_meter"]["address"] = EVMeter.Address;
