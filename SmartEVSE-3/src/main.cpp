@@ -3794,13 +3794,13 @@ int16_t getBatteryCurrent(void) {
 
 // When the home battery SoC threshold gate is enabled, delay/stall car charging
 // in SOLAR mode until the home battery has charged to (at least) the threshold.
-// A 2% deadband prevents flapping: after the battery has reached the threshold,
+// A 5% deadband prevents flapping: after the battery has reached the threshold,
 // charging continues until the SoC drops below threshold-2%.
 bool solarBatteryGateBlocks(void) {
     if (!homeBatteryThresholdEnabled || Mode != MODE_SOLAR) return false;
     if (homeBatterySoc < 0) return true;                        // SoC unknown -> hold charging
     if (homeBatterySoc >= (int8_t) homeBatterySoCThreshold) homeBatteryThresholdReached = true;
-    else if (homeBatterySoc <= (int8_t) homeBatterySoCThreshold - 2) homeBatteryThresholdReached = false;
+    else if (homeBatterySoc <= (int8_t) homeBatterySoCThreshold - 5) homeBatteryThresholdReached = false;
     return !homeBatteryThresholdReached;
 }
 
