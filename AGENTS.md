@@ -14,6 +14,15 @@ All commands run from the PlatformIO project directory, not repo root.
 - Build artifacts: `SmartEVSE-3/.pio/build/<env>/firmware.bin` (there is a `SmartEVSE-3/release` symlink to `release/`)
 - `DBG` levels: `0` = no logging (default), `1` = telnet debug server over WiFi, `2` = log to USB-C
 
+## OTA / Remote Flash
+The live controller (default `10.0.0.91`, a v3 ESP32) is flashed over WiFi with the
+skill in `.opencode/skills/smartevse-upload/` — see its `SKILL.md` for the full
+procedure. In short: build with the default `release` env, then
+`python3 .opencode/skills/smartevse-upload/upload.py` pushes `.pio/build/release/firmware.bin`
+to `/update` in 8192-byte chunks; the device reboots itself. Verify by polling
+`http://10.0.0.91/settings` (check the `version` build timestamp and state, e.g.
+`home_battery.*`). Locally built binaries upload as `firmware.bin` (unsigned).
+
 ## Pre-build Scripts (run automatically — do not skip)
 Configured via `extra_scripts` in `SmartEVSE-3/platformio.ini`. All of them shell out
 to `python`, so `python` (not just `python3`) must be on PATH; on Linux symlink

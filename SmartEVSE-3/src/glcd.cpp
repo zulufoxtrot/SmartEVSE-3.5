@@ -97,7 +97,6 @@ extern int16_t homeBatteryCurrent;
 extern time_t homeBatteryLastUpdate;
 extern int8_t homeBatterySoc;                                                 // Home battery SoC (0-100%, -1 = unavailable)
 extern uint8_t homeBatterySoCThreshold;                                       // Home battery SoC threshold for SOLAR charging gate
-extern int8_t homeBatteryEffectiveSoCThreshold(void);                         // Effective threshold (5% tolerance when threshold >= 95%)
 extern bool homeBatteryThresholdEnabled;                                      // Enable the home battery SoC threshold gate
 extern int8_t evSoc;                                                          // EV/car battery SoC (0-100%, -1 = unavailable)
 extern int solarPowerW;                                                       // Solar power in Watts (set via MQTT or calculated)
@@ -704,7 +703,7 @@ void GLCD(void) {
             // hourglass marker: the SOLAR battery threshold gate is holding charging back.
             // Only shown while the battery is below the threshold AND the car is not charging.
             bool batteryGateBlocking = homeBatteryThresholdEnabled && (Mode == MODE_SOLAR) &&
-                                       (homeBatterySoc < 0 || homeBatterySoc < homeBatteryEffectiveSoCThreshold()) &&
+                                       (homeBatterySoc < 0 || homeBatterySoc < (int8_t) homeBatterySoCThreshold) &&
                                        (State != STATE_C && State != STATE_D);
             if (batteryGateBlocking)
                 sprintf(Str, "%s %c", modeStr, (unsigned char) LCD_ICON_HOURGLASS);

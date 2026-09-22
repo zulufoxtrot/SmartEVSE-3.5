@@ -166,6 +166,8 @@ struct SettingsCache {
     uint16_t LCDPin;
     bool MQTTSmartServer;
     uint8_t LedMode;
+    uint8_t homeBatterySoCThreshold;
+    bool homeBatteryThresholdEnabled;
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION)
     uint8_t OcppMode;
 #endif
@@ -308,7 +310,6 @@ extern int16_t homeBatteryCurrent;
 extern time_t homeBatteryLastUpdate;
 extern int8_t homeBatterySoc;
 extern uint8_t homeBatterySoCThreshold;
-extern int8_t homeBatteryEffectiveSoCThreshold(void);
 extern bool homeBatteryThresholdEnabled;
 // set by EXTERNAL logic through MQTT/REST to indicate cheap tariffs ahead until unix time indicated
 extern uint8_t ColorOff[3] ;
@@ -791,6 +792,7 @@ void mqtt_receive_callback(const String topic, const String payload) {
         int8_t threshold = payload.toInt();
         if (threshold >= 0 && threshold <= 100) {
             homeBatterySoCThreshold = threshold;
+            request_write_settings();
 #if SMARTEVSE_VERSION >= 40
             SEND_TO_CH32(homeBatterySoCThreshold);
 #endif
@@ -799,15 +801,15 @@ void mqtt_receive_callback(const String topic, const String payload) {
         // Enable/disable the home battery SoC threshold gate (only applies in SOLAR mode)
         if (payload == "0" || payload == "false") {
             homeBatteryThresholdEnabled = false;
-#if SMARTEVSE_VERSION >= 40
-            SEND_TO_CH32(homeBatteryThresholdEnabled);
-#endif
         } else if (payload == "1" || payload == "true") {
             homeBatteryThresholdEnabled = true;
-#if SMARTEVSE_VERSION >= 40
-            SEND_TO_CH32(homeBatteryThresholdEnabled);
-#endif
+        } else {
+            return;
         }
+        request_write_settings();
+#if SMARTEVSE_VERSION >= 40
+        SEND_TO_CH32(homeBatteryThresholdEnabled);
+#endif
     } else if (topic == MQTTprefix + "/Set/EVSoC") {
         // Set EV/car battery State of Charge (0-100%)
         int8_t soc = payload.toInt();
@@ -1417,6 +1419,8 @@ void read_settings() {
         Grid = preferences.getUChar("Grid",GRID);
         SB2_WIFImode = preferences.getUChar("SB2WIFImode",SB2_WIFI_MODE);
         RFIDReader = preferences.getUChar("RFIDReader",RFID_READER);
+        homeBatterySoCThreshold = preferences.getUChar("HBSocThresh", 0);
+        homeBatteryThresholdEnabled = preferences.getBool("HBThrEnbl", false);
 
         MainsMeter.Type = preferences.getUChar("MainsMeter", MAINS_METER);
         MainsMeter.Address = preferences.getUChar("MainsMAddress",MAINS_METER_ADDRESS);
@@ -1529,6 +1533,8 @@ void read_settings() {
         settingsCache.LCDPin = LCDPin;
         settingsCache.MQTTSmartServer = MQTTSmartServer;
         settingsCache.LedMode = LedMode;
+        settingsCache.homeBatterySoCThreshold = homeBatterySoCThreshold;
+        settingsCache.homeBatteryThresholdEnabled = homeBatteryThresholdEnabled;
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION)
         settingsCache.OcppMode = OcppMode;
 #endif
@@ -1626,6 +1632,8 @@ void write_settings(void) {
     PREFS_PUT_USHORT_IF_CHANGED("LCDPin", LCDPin, LCDPin);
     PREFS_PUT_BOOL_IF_CHANGED("MQTTSmartServer", MQTTSmartServer, MQTTSmartServer);
     PREFS_PUT_UCHAR_IF_CHANGED("LedMode", LedMode, LedMode);
+    PREFS_PUT_UCHAR_IF_CHANGED("HBSocThresh", homeBatterySoCThreshold, homeBatterySoCThreshold);
+    PREFS_PUT_BOOL_IF_CHANGED("HBThrEnbl", homeBatteryThresholdEnabled, homeBatteryThresholdEnabled);
 
 #if ENABLE_OCPP && defined(SMARTEVSE_VERSION) //run OCPP only on ESP32
     PREFS_PUT_UCHAR_IF_CHANGED("OcppMode", OcppMode, OcppMode);
@@ -1959,7 +1967,7 @@ bool handle_URI(struct mg_connection *c, struct mg_http_message *hm,  webServerR
         doc["home_battery"]["soc_threshold"] = homeBatterySoCThreshold;
         doc["home_battery"]["threshold_enabled"] = homeBatteryThresholdEnabled;
         doc["home_battery"]["gate_blocking"] = (Mode == MODE_SOLAR) && homeBatteryThresholdEnabled &&
-                                               (homeBatterySoc < 0 || homeBatterySoc < homeBatteryEffectiveSoCThreshold());
+                                               (homeBatterySoc < 0 || homeBatterySoc < (int8_t) homeBatterySoCThreshold);
 
         doc["ev_meter"]["description"] = EMConfig[EVMeter.Type].Desc;
         doc["ev_meter"]["address"] = EVMeter.Address;

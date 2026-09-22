@@ -3000,6 +3000,8 @@ void SendConfigToCH32() {
     SEND_TO_CH32(StartCurrent)
     SEND_TO_CH32(StopTime)
     SEND_TO_CH32(Switch)
+    SEND_TO_CH32(homeBatterySoCThreshold)
+    SEND_TO_CH32(homeBatteryThresholdEnabled)
 }
 
 
@@ -3792,15 +3794,6 @@ int16_t getBatteryCurrent(void) {
     }
 }
 
-// Effective SoC threshold for the SOLAR gate. When the configured threshold is
-// >= 95%, the home battery charger stops recharging the battery to prevent
-// over-cycling, so a 5% tolerance is applied: the car may start once the battery
-// reaches threshold-5% instead of waiting for the full threshold.
-int8_t homeBatteryEffectiveSoCThreshold(void) {
-    if (homeBatterySoCThreshold >= 95) return homeBatterySoCThreshold - 5;
-    return homeBatterySoCThreshold;
-}
-
 // When the home battery SoC threshold gate is enabled, delay/stall car charging
 // in SOLAR mode until the home battery has charged to (at least) the threshold.
 // A 5% deadband prevents flapping: after the battery has reached the threshold,
@@ -3808,7 +3801,7 @@ int8_t homeBatteryEffectiveSoCThreshold(void) {
 bool solarBatteryGateBlocks(void) {
     if (!homeBatteryThresholdEnabled || Mode != MODE_SOLAR) return false;
     if (homeBatterySoc < 0) return true;                        // SoC unknown -> hold charging
-    int8_t threshold = homeBatteryEffectiveSoCThreshold();
+    int8_t threshold = (int8_t) homeBatterySoCThreshold;
     if (homeBatterySoc >= threshold) homeBatteryThresholdReached = true;
     else if (homeBatterySoc <= threshold - 5) homeBatteryThresholdReached = false;
     return !homeBatteryThresholdReached;
